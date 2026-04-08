@@ -1,3 +1,5 @@
+from typing import Callable, Any
+
 from rich.console import Console
 from rich.panel import Panel
 from rich.live import Live
@@ -23,7 +25,7 @@ def truncate_text(text: str, max_chars: int = 4000) -> str:
     return text[:max_chars] + "..."
 
 
-def run_with_spinner(console: Console, message: str, fn):
+def run_with_spinner(console: Console, message: str, fn: Callable[[], Any]) -> Any:
     """Run fn() while showing a spinner. Returns fn's result."""
     with console.status(f"[dim]{message}[/dim]", spinner="dots"):
         return fn()

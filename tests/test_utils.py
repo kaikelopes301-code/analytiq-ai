@@ -8,8 +8,13 @@ from utils import (
 
 
 def test_make_reasoning_panel_returns_panel():
-    panel = make_reasoning_panel("- MRR: mean=50k\n- QUEDA em 'churn_rate'")
+    text = "- MRR: mean=50k\n- QUEDA em 'churn_rate'"
+    panel = make_reasoning_panel(text)
     assert isinstance(panel, Panel)
+    assert panel.renderable == text
+    assert panel.title == "Raciocínio"
+    assert panel.border_style == "dim"
+    assert panel.padding == (0, 1)
 
 
 def test_truncate_text_limits_length():
@@ -19,6 +24,8 @@ def test_truncate_text_limits_length():
 
 
 def test_print_header_runs_without_error():
-    console = Console(quiet=True)
-    # should not raise
+    console = Console(record=True)
     print_header(console, "gemini-2.5-flash", "data/sample.csv")
+    output = console.export_text()
+    assert "gemini-2.5-flash" in output
+    assert "data/sample.csv" in output
