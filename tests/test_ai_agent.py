@@ -1,11 +1,13 @@
-# tests/test_ai_agent.py
-from ai_agent import build_prompt, ask
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+import ai_agent
+from ai_agent import ask, build_prompt, choose_default_model, list_available_models, resolve_model_name
 
 
 def test_build_prompt_includes_context():
     context = "revenue mean=15000"
-    insights = "- QUEDA em 'revenue' no período 4: -50.0%"
+    insights = "- QUEDA em 'revenue' em 2024-04: -50.0%"
     question = "Teve queda?"
     prompt = build_prompt(context, insights, question)
     assert "revenue" in prompt
@@ -15,17 +17,43 @@ def test_build_prompt_includes_context():
 
 def test_build_prompt_includes_no_hallucination_instruction():
     prompt = build_prompt("ctx", "insights", "q?")
-    assert "não invente" in prompt.lower() or "apenas" in prompt.lower()
+    assert "nunca invente" in prompt.lower() or "somente" in prompt.lower()
 
 
 def test_ask_is_a_generator():
     mock_chunk = MagicMock()
     mock_chunk.text = "resposta"
-    mock_model = MagicMock()
-    mock_model.generate_content.return_value = iter([mock_chunk])
+    mock_client = MagicMock()
+    mock_client.models.generate_content_stream.return_value = iter([mock_chunk])
 
-    with patch("ai_agent._get_model", return_value=mock_model):
-        result = ask("ctx", "insights", "pergunta?")
-        chunks = list(result)
+    with patch("ai_agent._get_client", return_value=mock_client):
+        chunks = list(ask("ctx", "insights", "pergunta?", model_name="gemini-2.5-flash"))
 
     assert chunks == ["resposta"]
+
+
+def test_list_available_models_filters_and_sorts():
+    ai_agent._MODEL_CACHE = None
+    mock_client = MagicMock()
+    mock_client.models.list.return_value = [
+        SimpleNamespace(name="models/gemini-2.0-flash", supported_actions=["generateContent"]),
+        SimpleNamespace(name="models/gemini-2.5-pro", supported_actions=["generateContent"]),
+        SimpleNamespace(name="models/gemini-2.5-flash", supported_actions=["generateContent"]),
+        SimpleNamespace(name="models/gemini-2.5-flash-preview-tts", supported_actions=["generateContent"]),
+        SimpleNamespace(name="models/text-bison", supported_actions=["generateContent"]),
+    ]
+
+    with patch("ai_agent._get_client", return_value=mock_client):
+        models = list_available_models(refresh=True)
+
+    assert models == ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-pro"]
+
+
+def test_choose_default_model_prefers_best_flash_variant():
+    models = ["gemini-2.5-pro", "gemini-2.0-flash", "gemini-2.5-flash"]
+    assert choose_default_model(models) == "gemini-2.5-flash"
+
+
+def test_resolve_model_name_falls_back_when_requested_is_unavailable():
+    models = ["gemini-2.5-flash", "gemini-2.0-flash"]
+    assert resolve_model_name("gemini-3-flash-preview", models) == "gemini-2.5-flash"
