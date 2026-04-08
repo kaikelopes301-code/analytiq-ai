@@ -1,50 +1,48 @@
 # AI Data Analysis Agent
 
-Agente de IA que analisa dados CSV e responde perguntas em linguagem natural usando Gemini.
+Agente de análise de dados em terminal com interface de chat, painel visual sob demanda e seleção dinâmica de modelos Gemini.
 
 ## Setup
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env
-# Adicione sua GEMINI_API_KEY no .env
 ```
 
-Obtenha sua chave gratuita em: https://aistudio.google.com/app/apikey
+Crie um `.env` com a sua chave:
+
+```bash
+GEMINI_API_KEY=sua_chave_aqui
+```
+
+Obtenha sua chave em [Google AI Studio](https://aistudio.google.com/app/apikey).
 
 ## Uso
 
 ```bash
 python main.py data/sample.csv
+python main.py data/sample.csv --model gemini-2.5-flash
 ```
+
+Ao iniciar, o app abre em uma tela clean e centralizada. O painel visual só aparece quando você pede por insights ou faz perguntas ligadas a métricas.
+
+## Comandos no chat
+
+- `/insights`: abre o painel visual com cards, tendências e highlights.
+- `/modelos`: lista os modelos Gemini disponíveis para a sua chave.
+- `/modelo <id>`: troca o modelo atual sem reiniciar.
+- `/modelo auto`: escolhe o melhor fallback disponível.
+- `/limpar`: limpa a tela e volta para a tela inicial.
+- `/sair`: encerra a sessão.
 
 ## Perguntas de exemplo
 
-- "Teve queda de receita?"
-- "Qual o maior valor de usuários?"
-- "Tem algo estranho nos dados?"
-- "Qual foi a tendência geral de conversões?"
+- "Me dá um insight visual do negócio"
+- "Como estão churn, MRR e clientes?"
+- "Qual foi a tendência dos últimos 6 meses?"
+- "Tem algum risco na retenção?"
 
 ## Rodar os testes
 
 ```bash
 pytest tests/ -v
-```
-
-## Estrutura
-
-```
-analytiq-ai/
-├── main.py           # Ponto de entrada — loop de perguntas
-├── data_loader.py    # Carregamento e validação do CSV
-├── analyzer.py       # Estatísticas, quedas, outliers, insights
-├── ai_agent.py       # Integração com Gemini
-├── utils.py          # Formatação no terminal
-├── data/
-│   └── sample.csv    # Dataset de exemplo
-└── tests/
-    ├── test_data_loader.py
-    ├── test_analyzer.py
-    ├── test_ai_agent.py
-    └── test_utils.py
 ```
