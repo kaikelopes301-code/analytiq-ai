@@ -1,4 +1,6 @@
+# ai_agent.py
 import os
+from typing import Generator
 import google.generativeai as genai
 from dotenv import load_dotenv
 from utils import truncate_text
@@ -17,8 +19,9 @@ def _get_model():
 
 def build_prompt(context: str, insights: str, question: str) -> str:
     """Assemble the full prompt sent to Gemini."""
-    return f"""Você é um analista de dados. Responda APENAS com base nos dados fornecidos.
+    return f"""Você é um analista de dados sênior. Responda APENAS com base nos dados fornecidos.
 Se não houver informação suficiente, diga isso claramente. Não invente dados.
+Seja analítico, direto e aponte causas prováveis quando os dados sugerirem.
 
 === RESUMO DOS DADOS ===
 {truncate_text(context, max_chars=2000)}
@@ -29,15 +32,17 @@ Se não houver informação suficiente, diga isso claramente. Não invente dados
 === PERGUNTA DO USUÁRIO ===
 {question}
 
-Responda de forma clara e objetiva em português."""
+Responda em português, de forma clara e objetiva."""
 
 
-def ask(context: str, insights: str, question: str) -> str:
-    """Send question + context to Gemini and return the answer."""
+def ask(context: str, insights: str, question: str) -> Generator[str, None, None]:
+    """Stream the Gemini response chunk by chunk."""
     model = _get_model()
     prompt = build_prompt(context, insights, question)
     try:
-        response = model.generate_content(prompt)
-        return response.text
+        response = model.generate_content(prompt, stream=True)
+        for chunk in response:
+            if chunk.text:
+                yield chunk.text
     except Exception as e:
-        return f"Erro ao consultar a IA: {e}"
+        yield f"Erro ao consultar a IA: {e}"
