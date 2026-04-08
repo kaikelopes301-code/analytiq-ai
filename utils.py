@@ -1,14 +1,19 @@
-SEPARATOR = "─" * 60
+from rich.console import Console
+from rich.panel import Panel
+from rich.live import Live
+from rich.text import Text
+
+console = Console()
 
 
-def format_answer(text: str) -> str:
-    """Wrap an AI answer with visual separators."""
-    return f"\n{SEPARATOR}\n{text}\n{SEPARATOR}\n"
+def print_header(console: Console, model: str, filepath: str) -> None:
+    """Print the single-line context header."""
+    console.print(f"\nanalytiq-ai  •  [dim]{model}[/dim]  •  [dim]{filepath}[/dim]\n")
 
 
-def format_insights_header() -> str:
-    """Return the header shown before auto-insights."""
-    return f"\nInsights automáticos:\n{SEPARATOR}"
+def make_reasoning_panel(insights: str) -> Panel:
+    """Build the Raciocínio panel from pre-computed insight text."""
+    return Panel(insights, title="Raciocínio", border_style="dim", padding=(0, 1))
 
 
 def truncate_text(text: str, max_chars: int = 4000) -> str:
@@ -18,7 +23,7 @@ def truncate_text(text: str, max_chars: int = 4000) -> str:
     return text[:max_chars] + "..."
 
 
-def print_welcome(filepath: str) -> None:
-    """Print welcome message after loading a CSV."""
-    print(f"\nDados carregados: {filepath}")
-    print("Digite sua pergunta (ou 'sair' para encerrar)\n")
+def run_with_spinner(console: Console, message: str, fn):
+    """Run fn() while showing a spinner. Returns fn's result."""
+    with console.status(f"[dim]{message}[/dim]", spinner="dots"):
+        return fn()
