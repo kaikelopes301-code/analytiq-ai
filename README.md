@@ -38,8 +38,22 @@ Ao iniciar, o app abre em uma tela clean e centralizada. O painel visual só apa
 
 - "Me dá um insight visual do negócio"
 - "Como estão churn, MRR e clientes?"
-- "Qual foi a tendência dos últimos 6 meses?"
-- "Tem algum risco na retenção?"
+- "Quais clientes puxaram o crescimento em 2024-12?"
+- "O crescimento veio mais de expansão ou de novos logos?"
+- "Que sinais de risco aparecem antes das quedas de MRR?"
+- "Qual segmento e canal mais ajudaram nos melhores meses?"
+
+## Base de exemplo
+
+O arquivo [data/sample.csv](C:/analytiq-ai/data/sample.csv) agora vem mais estruturado, com:
+
+- métricas SaaS mensais
+- drivers de retenção e expansão
+- mix de enterprise, mid-market e SMB
+- nomes de clientes legíveis
+- contexto qualitativo por mês para o agente interpretar melhor
+
+Veja também [data/README.md](C:/analytiq-ai/data/README.md).
 
 ## Rodar os testes
 

@@ -11,6 +11,33 @@ _KEY_METRICS = [
     "active_customers",
 ]
 
+_TEXT_CONTEXT_COLUMNS = [
+    "focus_segment",
+    "primary_channel",
+    "product_launch",
+    "top_new_logos",
+    "top_expansion_accounts",
+    "churned_accounts",
+    "customer_story",
+    "risk_signal",
+]
+
+_TABLE_CONTEXT_COLUMNS = [
+    "date",
+    "mrr",
+    "active_customers",
+    "new_customers",
+    "churned_customers",
+    "churn_rate",
+    "nps",
+    "cac",
+    "ltv_cac_ratio",
+    "net_revenue_retention_pct",
+    "top_new_logos",
+    "top_expansion_accounts",
+    "risk_signal",
+]
+
 
 def compute_basic_stats(df: pd.DataFrame) -> dict:
     """Return descriptive statistics for all numeric columns."""
@@ -63,6 +90,27 @@ def _pct_change(new, old):
     return (new - old) / abs(old) * 100 if old != 0 else None
 
 
+def _available_columns(df: pd.DataFrame, candidates: list[str]) -> list[str]:
+    """Return columns from candidates that exist in the DataFrame."""
+    return [col for col in candidates if col in df.columns]
+
+
+def _format_period(value) -> str:
+    """Format a date-like value as YYYY-MM when possible."""
+    return str(value)[:7]
+
+
+def _text_value(row: pd.Series, column: str) -> str | None:
+    """Return a clean text value if present."""
+    if column not in row.index:
+        return None
+    value = row[column]
+    if pd.isna(value):
+        return None
+    text = str(value).strip()
+    return text if text else None
+
+
 def generate_insights(df: pd.DataFrame) -> str:
     """Generate a concise summary focused on key business metrics."""
     lines = []
@@ -82,7 +130,7 @@ def generate_insights(df: pd.DataFrame) -> str:
             continue
         for d in drop_list:
             idx = d["index"]
-            label = str(date_col.iloc[idx])[:7] if date_col is not None else f"período {idx}"
+            label = _format_period(date_col.iloc[idx]) if date_col is not None else f"periodo {idx}"
             top_drops.append((abs(d["pct_change"]), col, label, d["pct_change"]))
 
     top_drops.sort(reverse=True)
@@ -96,6 +144,18 @@ def generate_insights(df: pd.DataFrame) -> str:
     for col, vals in list(key_outliers.items())[:2]:
         lines.append(f"- OUTLIER em '{col}': {[round(v, 2) for v in vals[:3]]}")
 
+    if not df.empty:
+        last = df.iloc[-1]
+        logos = _text_value(last, "top_new_logos")
+        expansions = _text_value(last, "top_expansion_accounts")
+        risk = _text_value(last, "risk_signal")
+        if logos:
+            lines.append(f"- Logos em destaque no ultimo mes: {logos}")
+        if expansions:
+            lines.append(f"- Expansoes relevantes no ultimo mes: {expansions}")
+        if risk:
+            lines.append(f"- Risco operacional atual: {risk}")
+
     return "\n".join(lines)
 
 
@@ -104,7 +164,7 @@ def get_snapshot(df: pd.DataFrame) -> dict:
     last = df.iloc[-1]
     prev = df.iloc[-2]
     has_date = "date" in df.columns
-    period = str(last["date"])[:7] if has_date else f"período {len(df) - 1}"
+    period = _format_period(last["date"]) if has_date else f"periodo {len(df) - 1}"
 
     return {
         "period": period,
@@ -137,9 +197,9 @@ def build_visual_snapshot(df: pd.DataFrame) -> dict:
     prev = df.iloc[-2]
 
     period = snapshot["period"]
-    prev_period = str(prev["date"])[:7] if has_date else f"período {len(df) - 2}"
+    prev_period = _format_period(prev["date"]) if has_date else f"periodo {len(df) - 2}"
     year_ago = df.iloc[-13] if len(df) >= 13 else None
-    year_ago_period = str(year_ago["date"])[:7] if (has_date and year_ago is not None) else None
+    year_ago_period = _format_period(year_ago["date"]) if (has_date and year_ago is not None) else None
 
     cards = [
         {
@@ -166,7 +226,7 @@ def build_visual_snapshot(df: pd.DataFrame) -> dict:
             "good_up": False,
             "change_unit": "pp",
             "change_decimals": 2,
-            "caption": "saúde da retenção",
+            "caption": "saude da retencao",
         },
         {
             "label": "NPS",
@@ -184,7 +244,7 @@ def build_visual_snapshot(df: pd.DataFrame) -> dict:
             "change": snapshot["cac_chg"],
             "format": "currency",
             "good_up": False,
-            "caption": "custo de aquisição",
+            "caption": "custo de aquisicao",
         },
         {
             "label": "LTV / CAC",
@@ -193,7 +253,7 @@ def build_visual_snapshot(df: pd.DataFrame) -> dict:
             "format": "ratio",
             "good_up": True,
             "change_unit": "x",
-            "caption": "eficiência unitária",
+            "caption": "eficiencia unitaria",
         },
     ]
 
@@ -257,15 +317,15 @@ def build_visual_snapshot(df: pd.DataFrame) -> dict:
             ),
         },
         {
-            "title": "Retenção",
+            "title": "Retencao",
             "tone": "positive" if snapshot["churn_chg"] <= 0 else "warning",
             "body": (
                 f"Churn em {snapshot['churn_rate']:.2f}% e NPS em {snapshot['nps']}, "
-                f"mostrando {'estabilidade' if snapshot['churn_chg'] <= 0 else 'pressão'} na experiência."
+                f"mostrando {'estabilidade' if snapshot['churn_chg'] <= 0 else 'pressao'} na experiencia."
             ),
         },
         {
-            "title": "Eficiência",
+            "title": "Eficiencia",
             "tone": "positive" if (snapshot["cac_chg"] or 0) <= 0 and snapshot["ltv_cac"] >= 3 else "warning",
             "body": (
                 f"CAC em {last['cac']:,.0f} e LTV/CAC em {last['ltv_cac_ratio']:.2f}x "
@@ -273,6 +333,16 @@ def build_visual_snapshot(df: pd.DataFrame) -> dict:
             ),
         },
     ]
+
+    logos = _text_value(last, "top_new_logos")
+    if logos:
+        highlights.append(
+            {
+                "title": "Contas novas",
+                "tone": "positive",
+                "body": f"Novos logos de destaque em {period}: {logos}.",
+            }
+        )
 
     if year_ago is not None:
         highlights.append(
@@ -298,56 +368,97 @@ def build_visual_snapshot(df: pd.DataFrame) -> dict:
 
 
 def build_ai_context(df: pd.DataFrame) -> str:
-    """Build a rich, structured context that lets the AI answer any question accurately."""
+    """Build a rich, structured context that helps the model answer accurately."""
     sections = []
     has_date = "date" in df.columns
     dates = df["date"].astype(str) if has_date else None
 
-    last_month = dates.iloc[-1][:7] if has_date else f"período {len(df)-1}"
-    prev_month = dates.iloc[-2][:7] if has_date else f"período {len(df)-2}"
+    last_month = dates.iloc[-1][:7] if has_date else f"periodo {len(df)-1}"
+    prev_month = dates.iloc[-2][:7] if has_date else f"periodo {len(df)-2}"
     year_ago_month = dates.iloc[-13][:7] if (has_date and len(df) >= 13) else None
-    first_month = dates.iloc[0][:7] if has_date else "período 0"
+    first_month = dates.iloc[0][:7] if has_date else "periodo 0"
 
-    sections.append(f"PERÍODO DOS DADOS: {first_month} até {last_month} ({len(df)} meses)")
-    sections.append(f"ÚLTIMO MÊS NOS DADOS: {last_month}")
-    sections.append(f"MÊS ANTERIOR AO ÚLTIMO: {prev_month}")
+    sections.append(f"PERIODO DOS DADOS: {first_month} ate {last_month} ({len(df)} meses)")
+    sections.append(f"ULTIMO MES NOS DADOS: {last_month}")
+    sections.append(f"MES ANTERIOR AO ULTIMO: {prev_month}")
     if year_ago_month:
-        sections.append(f"MESMO MÊS DO ANO PASSADO: {year_ago_month}")
+        sections.append(f"MESMO MES DO ANO PASSADO: {year_ago_month}")
     sections.append("")
 
     key_cols = [c for c in _KEY_METRICS if c in df.columns]
     last = df.iloc[-1]
     prev = df.iloc[-2]
 
-    sections.append(f"ÚLTIMO MÊS vs MÊS ANTERIOR ({last_month} vs {prev_month}):")
+    sections.append(f"ULTIMO MES vs MES ANTERIOR ({last_month} vs {prev_month}):")
     for col in key_cols:
         lv, pv = last[col], prev[col]
         if pv != 0:
             pct = (lv - pv) / abs(pv) * 100
-            arrow = "↑" if pct > 0.5 else ("↓" if pct < -0.5 else "→")
-            sections.append(f"  {col}: {lv:.2f} vs {pv:.2f} ({pct:+.1f}%) {arrow}")
+            direction = "alta" if pct > 0.5 else ("queda" if pct < -0.5 else "estavel")
+            sections.append(f"  {col}: {lv:.2f} vs {pv:.2f} ({pct:+.1f}%) {direction}")
         else:
             sections.append(f"  {col}: {lv:.2f}")
     sections.append("")
 
+    compare_cols = _available_columns(
+        df,
+        [
+            "net_revenue_retention_pct",
+            "gross_revenue_retention_pct",
+            "expansion_mrr",
+            "contraction_mrr",
+            "reactivation_mrr",
+            "pipeline_coverage",
+            "win_rate_pct",
+            "support_sla_pct",
+            "onboarding_days",
+        ],
+    )
+    if compare_cols:
+        sections.append("INDICADORES OPERACIONAIS DO ULTIMO MES:")
+        for col in compare_cols:
+            sections.append(f"  {col}: {last[col]}")
+        sections.append("")
+
     if year_ago_month and len(df) >= 13:
         year_ago = df.iloc[-13]
-        sections.append(f"ÚLTIMO MÊS vs MESMO MÊS ANO PASSADO ({last_month} vs {year_ago_month}):")
+        sections.append(f"ULTIMO MES vs MESMO MES ANO PASSADO ({last_month} vs {year_ago_month}):")
         for col in key_cols:
             lv, yv = last[col], year_ago[col]
             if yv != 0:
                 pct = (lv - yv) / abs(yv) * 100
-                arrow = "↑↑" if pct > 20 else ("↑" if pct > 0.5 else ("↓↓" if pct < -20 else ("↓" if pct < -0.5 else "→")))
-                sections.append(f"  {col}: {lv:.2f} vs {yv:.2f} ({pct:+.1f}%) {arrow}")
+                intensity = "forte alta" if pct > 20 else ("alta" if pct > 0.5 else ("forte queda" if pct < -20 else ("queda" if pct < -0.5 else "estavel")))
+                sections.append(f"  {col}: {lv:.2f} vs {yv:.2f} ({pct:+.1f}%) {intensity}")
         sections.append("")
 
     if len(df) >= 6:
         last6 = df.tail(6)
         labels = dates.iloc[-6:].str[:7].tolist() if has_date else [str(i) for i in range(len(df) - 6, len(df))]
-        sections.append("TENDÊNCIA ÚLTIMOS 6 MESES:")
+        sections.append("TENDENCIA ULTIMOS 6 MESES:")
         for col in key_cols[:4]:
-            vals = " → ".join(f"{d}={last6.iloc[i][col]:.0f}" for i, d in enumerate(labels))
+            vals = " -> ".join(f"{d}={last6.iloc[i][col]:.0f}" for i, d in enumerate(labels))
             sections.append(f"  {col}: {vals}")
+        sections.append("")
+
+    text_cols = _available_columns(df, _TEXT_CONTEXT_COLUMNS)
+    if text_cols:
+        sections.append("CONTEXTO QUALITATIVO DO ULTIMO MES:")
+        for col in text_cols:
+            value = _text_value(last, col)
+            if value:
+                sections.append(f"  {col}: {value}")
+        sections.append("")
+
+        sections.append("CONTEXTO QUALITATIVO ULTIMOS 4 MESES:")
+        for _, row in df.tail(4).iterrows():
+            label = _format_period(row["date"]) if has_date else "periodo"
+            pieces = []
+            for col in text_cols:
+                value = _text_value(row, col)
+                if value:
+                    pieces.append(f"{col}={value}")
+            if pieces:
+                sections.append(f"  {label}: " + " | ".join(pieces))
         sections.append("")
 
     drops = detect_drops(df, threshold=-8.0)
@@ -355,7 +466,7 @@ def build_ai_context(df: pd.DataFrame) -> str:
     if mrr_drops:
         worst = max(mrr_drops, key=lambda x: abs(x["pct_change"]))
         idx = worst["index"]
-        label = str(df["date"].iloc[idx])[:7] if has_date else f"período {idx}"
+        label = _format_period(df["date"].iloc[idx]) if has_date else f"periodo {idx}"
         sections.append(f"PIOR QUEDA DE MRR: {label} ({worst['pct_change']:.1f}%)")
 
     outliers = detect_outliers(df)
@@ -367,13 +478,18 @@ def build_ai_context(df: pd.DataFrame) -> str:
         sections.append("")
 
     stats = compute_basic_stats(df)
-    sections.append("ESTATÍSTICAS HISTÓRICAS:")
+    sections.append("ESTATISTICAS HISTORICAS:")
     for col in key_cols:
         s = stats[col]
-        sections.append(f"  {col}: média={s['mean']:.2f}, mín={s['min']:.2f}, máx={s['max']:.2f}")
+        sections.append(f"  {col}: media={s['mean']:.2f}, min={s['min']:.2f}, max={s['max']:.2f}")
     sections.append("")
 
-    sections.append("TABELA COMPLETA (todos os meses):")
-    sections.append(df.to_string(index=False))
+    table_cols = _available_columns(df, _TABLE_CONTEXT_COLUMNS)
+    if table_cols:
+        sections.append("TABELA RESUMIDA ULTIMOS 12 MESES:")
+        sections.append(df[table_cols].tail(12).to_string(index=False))
+    else:
+        sections.append("TABELA RESUMIDA ULTIMOS 12 MESES:")
+        sections.append(df.tail(12).to_string(index=False))
 
     return "\n".join(sections)
