@@ -2,6 +2,7 @@ import pandas as pd
 import pytest
 
 from analyzer import (
+    build_ai_context,
     build_visual_snapshot,
     compute_basic_stats,
     compute_pct_change,
@@ -70,3 +71,37 @@ def test_build_visual_snapshot_returns_visual_sections(saas_df):
     assert len(visual["cards"]) == 6
     assert len(visual["trends"]) == 4
     assert len(visual["highlights"]) >= 3
+
+
+def test_build_ai_context_includes_qualitative_customer_context(saas_df):
+    enriched = saas_df.copy()
+    enriched["focus_segment"] = [
+        "PMEs",
+        "PMEs",
+        "mid-market",
+        "mid-market",
+        "enterprise",
+        "enterprise",
+    ]
+    enriched["top_new_logos"] = [
+        "Casa Norte",
+        "AtlasPay",
+        "Hospital Santa Aurora",
+        "VerdeLog",
+        "Nexa Saude",
+        "Grupo Prisma Varejo",
+    ]
+    enriched["risk_signal"] = [
+        "onboarding manual",
+        "pipeline curto",
+        "pressao no suporte",
+        "renovacoes longas",
+        "expansao concentrada",
+        "implantacoes enterprise",
+    ]
+
+    context = build_ai_context(enriched)
+
+    assert "CONTEXTO QUALITATIVO DO ULTIMO MES" in context
+    assert "Grupo Prisma Varejo" in context
+    assert "implantacoes enterprise" in context
