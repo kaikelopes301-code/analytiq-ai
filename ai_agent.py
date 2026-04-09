@@ -100,13 +100,14 @@ REGRAS:
 - Responda SOMENTE com base nos dados abaixo. Nunca invente ou estime números.
 - "Último mês", "mês passado" ou "mais recente" = o mês indicado em ÚLTIMO MÊS NOS DADOS.
 - Cite sempre valores exatos e variações percentuais dos dados.
+- Quando a pergunta envolver clientes, canais, segmentos ou risco, use também o contexto qualitativo e os nomes de contas presentes na base.
 - Se identificar padrões relevantes além da pergunta, mencione em 1 linha.
 - Se os dados não tiverem a informação solicitada, diga claramente.
 
-{truncate_text(context, max_chars=3800)}
+{truncate_text(context, max_chars=7000)}
 
 ALERTAS PRÉ-CALCULADOS:
-{truncate_text(insights, max_chars=500)}
+{truncate_text(insights, max_chars=700)}
 
 PERGUNTA: {question}
 
