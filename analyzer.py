@@ -1,495 +1,414 @@
 import pandas as pd
-
-_KEY_METRICS = [
-    "mrr",
-    "churn_rate",
-    "nps",
-    "gross_margin_pct",
-    "cac",
-    "ltv",
-    "ltv_cac_ratio",
-    "active_customers",
-]
-
-_TEXT_CONTEXT_COLUMNS = [
-    "focus_segment",
-    "primary_channel",
-    "product_launch",
-    "top_new_logos",
-    "top_expansion_accounts",
-    "churned_accounts",
-    "customer_story",
-    "risk_signal",
-]
-
-_TABLE_CONTEXT_COLUMNS = [
-    "date",
-    "mrr",
-    "active_customers",
-    "new_customers",
-    "churned_customers",
-    "churn_rate",
-    "nps",
-    "cac",
-    "ltv_cac_ratio",
-    "net_revenue_retention_pct",
-    "top_new_logos",
-    "top_expansion_accounts",
-    "risk_signal",
-]
+import re
 
 
-def compute_basic_stats(df: pd.DataFrame) -> dict:
-    """Return descriptive statistics for all numeric columns."""
-    numeric_df = df.select_dtypes(include="number")
-    stats = {}
-    for col in numeric_df.columns:
-        desc = numeric_df[col].describe()
-        stats[col] = desc.to_dict()
-    return stats
+def get_snapshot(workbook: dict) -> dict:
+    """Build a small summary used by the welcome screen."""
+    sheets = workbook["sheets"]
+    total_rows = sum(sheet["shape"][0] for sheet in sheets)
+    total_formulas = sum(sheet["formula_count"] for sheet in sheets)
+    total_empty_columns = sum(len(sheet["column_summary"]["empty_columns"]) for sheet in sheets)
+    primary_sheet = _pick_primary_sheets(workbook, limit=1)[0] if sheets else None
+
+    return {
+        "sheet_count": workbook["sheet_count"],
+        "total_rows": total_rows,
+        "total_formulas": total_formulas,
+        "total_empty_columns": total_empty_columns,
+        "primary_sheet": primary_sheet["name"] if primary_sheet else None,
+        "primary_rows": primary_sheet["shape"][0] if primary_sheet else 0,
+        "filetype": workbook["filetype"],
+    }
 
 
-def compute_pct_change(df: pd.DataFrame) -> pd.DataFrame:
-    """Return period-over-period percentage change for numeric columns."""
-    numeric_df = df.select_dtypes(include="number")
-    return numeric_df.pct_change() * 100
+def generate_insights(workbook: dict) -> str:
+    """Generate lightweight workbook-level insights for the prompt."""
+    sheets = workbook["sheets"]
+    snapshot = get_snapshot(workbook)
+    story = _workbook_story(workbook)
+    lines = [
+        f"- Arquivo {workbook['filetype']} com {snapshot['sheet_count']} abas e {snapshot['total_rows']} linhas uteis.",
+        f"- Foram detectadas {snapshot['total_formulas']} formulas e {snapshot['total_empty_columns']} colunas totalmente vazias.",
+    ]
+    if story:
+        lines.append(f"- Leitura geral: {story}.")
 
+    primary_sheets = _pick_primary_sheets(workbook, limit=3)
+    if primary_sheets:
+        lines.append(
+            "- Abas com maior volume: "
+            + ", ".join(f"{sheet['name']} ({sheet['shape'][0]} linhas)" for sheet in primary_sheets)
+        )
 
-def detect_outliers(df: pd.DataFrame) -> dict:
-    """Detect outliers using IQR method. Returns {col: [outlier_values]}."""
-    numeric_df = df.select_dtypes(include="number")
-    outliers = {}
-    for col in numeric_df.columns:
-        q1 = numeric_df[col].quantile(0.25)
-        q3 = numeric_df[col].quantile(0.75)
-        iqr = q3 - q1
-        lower = q1 - 1.5 * iqr
-        upper = q3 + 1.5 * iqr
-        flagged = numeric_df[col][(numeric_df[col] < lower) | (numeric_df[col] > upper)]
-        if not flagged.empty:
-            outliers[col] = flagged.tolist()
-    return outliers
+    formula_sheets = [sheet for sheet in sheets if sheet["formula_count"] > 0]
+    if formula_sheets:
+        lines.append(
+            "- Abas com formulas: "
+            + ", ".join(f"{sheet['name']} ({sheet['formula_count']})" for sheet in formula_sheets[:4])
+        )
 
+    noisiest = _sheet_with_most_empty_columns(workbook)
+    if noisiest and noisiest["column_summary"]["empty_columns"]:
+        lines.append(
+            f"- Aba com mais colunas vazias: {noisiest['name']} ({len(noisiest['column_summary']['empty_columns'])})."
+        )
 
-def detect_drops(df: pd.DataFrame, threshold: float = -15.0) -> dict:
-    """Find columns with period drops below the threshold (negative %)."""
-    changes = compute_pct_change(df)
-    drops = {}
-    for col in changes.columns:
-        significant = changes[col][changes[col] < threshold].dropna()
-        if not significant.empty:
-            drops[col] = [
-                {"index": int(i), "pct_change": round(v, 2)}
-                for i, v in significant.items()
-            ]
-    return drops
+    primary_sheet = primary_sheets[0] if primary_sheets else None
+    if primary_sheet:
+        summary = primary_sheet["column_summary"]
+        lines.append(
+            f"- Aba principal {primary_sheet['name']} tem {len(summary['numeric_columns'])} colunas numericas, "
+            f"{len(summary['date_columns'])} colunas de data e {len(summary['text_columns'])} colunas textuais."
+        )
+        lines.append(f"- Leitura provavel da aba principal: {_sheet_role(primary_sheet)}.")
+        if summary["formula_columns"]:
+            lines.append(f"- Colunas calculadas por formula na aba principal: {', '.join(summary['formula_columns'][:4])}.")
+        high_missing = summary["mostly_empty_columns"][:3]
+        if high_missing:
+            lines.append(f"- Colunas quase vazias na aba principal: {', '.join(high_missing)}.")
 
-
-def _pct_change(new, old):
-    """Safely compute percentage change."""
-    return (new - old) / abs(old) * 100 if old != 0 else None
-
-
-def _available_columns(df: pd.DataFrame, candidates: list[str]) -> list[str]:
-    """Return columns from candidates that exist in the DataFrame."""
-    return [col for col in candidates if col in df.columns]
-
-
-def _format_period(value) -> str:
-    """Format a date-like value as YYYY-MM when possible."""
-    return str(value)[:7]
-
-
-def _text_value(row: pd.Series, column: str) -> str | None:
-    """Return a clean text value if present."""
-    if column not in row.index:
-        return None
-    value = row[column]
-    if pd.isna(value):
-        return None
-    text = str(value).strip()
-    return text if text else None
-
-
-def generate_insights(df: pd.DataFrame) -> str:
-    """Generate a concise summary focused on key business metrics."""
-    lines = []
-    stats = compute_basic_stats(df)
-    drops = detect_drops(df)
-    outliers = detect_outliers(df)
-    date_col = df["date"] if "date" in df.columns else None
-    key_cols = [c for c in _KEY_METRICS if c in stats]
-
-    for col in key_cols[:5]:
-        s = stats[col]
-        lines.append(f"- {col}: mean={s['mean']:.2f}, min={s['min']:.2f}, max={s['max']:.2f}")
-
-    top_drops = []
-    for col, drop_list in drops.items():
-        if col not in key_cols:
-            continue
-        for d in drop_list:
-            idx = d["index"]
-            label = _format_period(date_col.iloc[idx]) if date_col is not None else f"periodo {idx}"
-            top_drops.append((abs(d["pct_change"]), col, label, d["pct_change"]))
-
-    top_drops.sort(reverse=True)
-    if top_drops:
-        for _, col, label, pct in top_drops[:5]:
-            lines.append(f"- QUEDA em '{col}' em {label}: {pct:.1f}%")
-    else:
-        lines.append("- Sem quedas significativas nos indicadores-chave.")
-
-    key_outliers = {k: v for k, v in outliers.items() if k in key_cols}
-    for col, vals in list(key_outliers.items())[:2]:
-        lines.append(f"- OUTLIER em '{col}': {[round(v, 2) for v in vals[:3]]}")
-
-    if not df.empty:
-        last = df.iloc[-1]
-        logos = _text_value(last, "top_new_logos")
-        expansions = _text_value(last, "top_expansion_accounts")
-        risk = _text_value(last, "risk_signal")
-        if logos:
-            lines.append(f"- Logos em destaque no ultimo mes: {logos}")
-        if expansions:
-            lines.append(f"- Expansoes relevantes no ultimo mes: {expansions}")
-        if risk:
-            lines.append(f"- Risco operacional atual: {risk}")
+    relationship_hints = _relationship_hints(workbook)
+    if relationship_hints:
+        lines.append("- Relacoes provaveis entre abas: " + "; ".join(relationship_hints[:3]))
 
     return "\n".join(lines)
 
 
-def get_snapshot(df: pd.DataFrame) -> dict:
-    """Return last-period values and MoM changes for the dashboard display."""
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
-    has_date = "date" in df.columns
-    period = _format_period(last["date"]) if has_date else f"periodo {len(df) - 1}"
-
-    return {
-        "period": period,
-        "months": len(df),
-        "mrr": last["mrr"],
-        "mrr_chg": _pct_change(last["mrr"], prev["mrr"]),
-        "customers": int(last["active_customers"]),
-        "customers_chg": _pct_change(last["active_customers"], prev["active_customers"]),
-        "churn_rate": last["churn_rate"] * 100,
-        "churn_chg": (last["churn_rate"] - prev["churn_rate"]) * 100,
-        "nps": int(last["nps"]),
-        "nps_chg": float(last["nps"] - prev["nps"]),
-        "cac": last["cac"],
-        "cac_chg": _pct_change(last["cac"], prev["cac"]),
-        "ltv": last["ltv"],
-        "ltv_chg": _pct_change(last["ltv"], prev["ltv"]),
-        "ltv_cac": last["ltv_cac_ratio"],
-        "ltv_cac_chg": float(last["ltv_cac_ratio"] - prev["ltv_cac_ratio"]),
-        "gross_margin": last["gross_margin_pct"],
-        "gross_margin_chg": float(last["gross_margin_pct"] - prev["gross_margin_pct"]),
-    }
-
-
-def build_visual_snapshot(df: pd.DataFrame) -> dict:
-    """Create structured data for the on-demand visual insights board."""
-    snapshot = get_snapshot(df)
-    has_date = "date" in df.columns
-    dates = df["date"].astype(str) if has_date else pd.Series(dtype="object")
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
-
-    period = snapshot["period"]
-    prev_period = _format_period(prev["date"]) if has_date else f"periodo {len(df) - 2}"
-    year_ago = df.iloc[-13] if len(df) >= 13 else None
-    year_ago_period = _format_period(year_ago["date"]) if (has_date and year_ago is not None) else None
+def build_visual_snapshot(workbook: dict) -> dict:
+    """Build a generic visual summary for the /insights command."""
+    snapshot = get_snapshot(workbook)
+    primary_sheet = _pick_primary_sheets(workbook, limit=1)[0] if workbook["sheets"] else None
 
     cards = [
-        {
-            "label": "MRR",
-            "value": snapshot["mrr"],
-            "change": snapshot["mrr_chg"],
-            "format": "currency",
-            "good_up": True,
-            "caption": f"fechamento de {period}",
-        },
-        {
-            "label": "Clientes",
-            "value": snapshot["customers"],
-            "change": snapshot["customers_chg"],
-            "format": "integer",
-            "good_up": True,
-            "caption": "base ativa",
-        },
-        {
-            "label": "Churn",
-            "value": snapshot["churn_rate"],
-            "change": snapshot["churn_chg"],
-            "format": "percent",
-            "good_up": False,
-            "change_unit": "pp",
-            "change_decimals": 2,
-            "caption": "saude da retencao",
-        },
-        {
-            "label": "NPS",
-            "value": snapshot["nps"],
-            "change": snapshot["nps_chg"],
-            "format": "integer",
-            "good_up": True,
-            "change_unit": " pts",
-            "change_decimals": 0,
-            "caption": "voz do cliente",
-        },
-        {
-            "label": "CAC",
-            "value": snapshot["cac"],
-            "change": snapshot["cac_chg"],
-            "format": "currency",
-            "good_up": False,
-            "caption": "custo de aquisicao",
-        },
-        {
-            "label": "LTV / CAC",
-            "value": snapshot["ltv_cac"],
-            "change": snapshot["ltv_cac_chg"],
-            "format": "ratio",
-            "good_up": True,
-            "change_unit": "x",
-            "caption": "eficiencia unitaria",
-        },
+        {"label": "Abas", "value": snapshot["sheet_count"], "caption": "estruturas detectadas"},
+        {"label": "Linhas", "value": snapshot["total_rows"], "caption": "linhas uteis"},
+        {"label": "Formulas", "value": snapshot["total_formulas"], "caption": "celulas com formula"},
+        {"label": "Colunas vazias", "value": snapshot["total_empty_columns"], "caption": "campos sem dados"},
     ]
 
-    recent_window = min(6, len(df))
-    recent = df.tail(recent_window).reset_index(drop=True)
-    labels = (
-        dates.iloc[-recent_window:].str[:7].tolist()
-        if has_date
-        else [str(i) for i in range(len(df) - recent_window, len(df))]
-    )
-    trends = [
-        {
-            "label": "MRR",
-            "series": recent["mrr"].tolist(),
-            "labels": labels,
-            "format": "currency",
-            "current": snapshot["mrr"],
-            "change": snapshot["mrr_chg"],
-            "good_up": True,
-        },
-        {
-            "label": "Clientes",
-            "series": recent["active_customers"].tolist(),
-            "labels": labels,
-            "format": "integer",
-            "current": snapshot["customers"],
-            "change": snapshot["customers_chg"],
-            "good_up": True,
-        },
-        {
-            "label": "NPS",
-            "series": recent["nps"].tolist(),
-            "labels": labels,
-            "format": "integer",
-            "current": snapshot["nps"],
-            "change": snapshot["nps_chg"],
-            "good_up": True,
-            "change_unit": " pts",
-            "change_decimals": 0,
-        },
-        {
-            "label": "Churn",
-            "series": (recent["churn_rate"] * 100).tolist(),
-            "labels": labels,
-            "format": "percent",
-            "current": snapshot["churn_rate"],
-            "change": snapshot["churn_chg"],
-            "good_up": False,
-            "change_unit": "pp",
-            "change_decimals": 2,
-        },
-    ]
+    sheets = []
+    for sheet in _pick_primary_sheets(workbook, limit=min(6, len(workbook["sheets"]))):
+        summary = sheet["column_summary"]
+        sheets.append(
+            {
+                "name": sheet["name"],
+                "rows": sheet["shape"][0],
+                "columns": sheet["shape"][1],
+                "numeric_columns": len(summary["numeric_columns"]),
+                "date_columns": len(summary["date_columns"]),
+                "formula_count": sheet["formula_count"],
+                "key_columns": summary["usable_columns"][:4],
+                "notes": _sheet_note(sheet),
+            }
+        )
 
     highlights = [
-        {
-            "title": "Receita",
-            "tone": "positive" if (snapshot["mrr_chg"] or 0) >= 0 else "warning",
-            "body": (
-                f"{period} fechou com MRR de {last['mrr']:,.0f}, "
-                f"{_pct_change(last['mrr'], prev['mrr']):+.1f}% contra {prev_period}."
-            ),
-        },
-        {
-            "title": "Retencao",
-            "tone": "positive" if snapshot["churn_chg"] <= 0 else "warning",
-            "body": (
-                f"Churn em {snapshot['churn_rate']:.2f}% e NPS em {snapshot['nps']}, "
-                f"mostrando {'estabilidade' if snapshot['churn_chg'] <= 0 else 'pressao'} na experiencia."
-            ),
-        },
-        {
-            "title": "Eficiencia",
-            "tone": "positive" if (snapshot["cac_chg"] or 0) <= 0 and snapshot["ltv_cac"] >= 3 else "warning",
-            "body": (
-                f"CAC em {last['cac']:,.0f} e LTV/CAC em {last['ltv_cac_ratio']:.2f}x "
-                f"no fechamento mais recente."
-            ),
-        },
+        f"Arquivo {workbook['filetype']} com {snapshot['sheet_count']} abas e {snapshot['total_rows']} linhas uteis.",
     ]
-
-    logos = _text_value(last, "top_new_logos")
-    if logos:
+    if primary_sheet:
         highlights.append(
-            {
-                "title": "Contas novas",
-                "tone": "positive",
-                "body": f"Novos logos de destaque em {period}: {logos}.",
-            }
+            f"Aba principal: {primary_sheet['name']} com {primary_sheet['shape'][0]} linhas e {primary_sheet['shape'][1]} colunas."
         )
-
-    if year_ago is not None:
-        highlights.append(
-            {
-                "title": "Janela anual",
-                "tone": "positive",
-                "body": (
-                    f"Contra {year_ago_period}, o MRR variou "
-                    f"{_pct_change(last['mrr'], year_ago['mrr']):+.1f}% e a base ativa "
-                    f"{_pct_change(last['active_customers'], year_ago['active_customers']):+.1f}%."
-                ),
-            }
-        )
+    if snapshot["total_formulas"]:
+        highlights.append(f"Foram detectadas {snapshot['total_formulas']} formulas no workbook.")
+    else:
+        highlights.append("Nenhuma formula foi detectada no workbook.")
 
     return {
-        "period": period,
-        "previous_period": prev_period,
-        "months": len(df),
         "cards": cards,
-        "trends": trends,
+        "sheets": sheets,
         "highlights": highlights,
     }
 
 
-def build_ai_context(df: pd.DataFrame) -> str:
-    """Build a rich, structured context that helps the model answer accurately."""
+def build_ai_context(workbook: dict) -> str:
+    """Build a compact runtime context for spreadsheet QA."""
     sections = []
-    has_date = "date" in df.columns
-    dates = df["date"].astype(str) if has_date else None
-
-    last_month = dates.iloc[-1][:7] if has_date else f"periodo {len(df)-1}"
-    prev_month = dates.iloc[-2][:7] if has_date else f"periodo {len(df)-2}"
-    year_ago_month = dates.iloc[-13][:7] if (has_date and len(df) >= 13) else None
-    first_month = dates.iloc[0][:7] if has_date else "periodo 0"
-
-    sections.append(f"PERIODO DOS DADOS: {first_month} ate {last_month} ({len(df)} meses)")
-    sections.append(f"ULTIMO MES NOS DADOS: {last_month}")
-    sections.append(f"MES ANTERIOR AO ULTIMO: {prev_month}")
-    if year_ago_month:
-        sections.append(f"MESMO MES DO ANO PASSADO: {year_ago_month}")
-    sections.append("")
-
-    key_cols = [c for c in _KEY_METRICS if c in df.columns]
-    last = df.iloc[-1]
-    prev = df.iloc[-2]
-
-    sections.append(f"ULTIMO MES vs MES ANTERIOR ({last_month} vs {prev_month}):")
-    for col in key_cols:
-        lv, pv = last[col], prev[col]
-        if pv != 0:
-            pct = (lv - pv) / abs(pv) * 100
-            direction = "alta" if pct > 0.5 else ("queda" if pct < -0.5 else "estavel")
-            sections.append(f"  {col}: {lv:.2f} vs {pv:.2f} ({pct:+.1f}%) {direction}")
-        else:
-            sections.append(f"  {col}: {lv:.2f}")
-    sections.append("")
-
-    compare_cols = _available_columns(
-        df,
-        [
-            "net_revenue_retention_pct",
-            "gross_revenue_retention_pct",
-            "expansion_mrr",
-            "contraction_mrr",
-            "reactivation_mrr",
-            "pipeline_coverage",
-            "win_rate_pct",
-            "support_sla_pct",
-            "onboarding_days",
-        ],
+    snapshot = get_snapshot(workbook)
+    sections.append(f"ARQUIVO: {workbook['filepath']}")
+    sections.append(f"TIPO: {workbook['filetype']}")
+    sections.append(
+        f"WORKBOOK OVERVIEW: {snapshot['sheet_count']} abas, {snapshot['total_rows']} linhas uteis, "
+        f"{snapshot['total_formulas']} formulas, {snapshot['total_empty_columns']} colunas vazias"
     )
-    if compare_cols:
-        sections.append("INDICADORES OPERACIONAIS DO ULTIMO MES:")
-        for col in compare_cols:
-            sections.append(f"  {col}: {last[col]}")
-        sections.append("")
-
-    if year_ago_month and len(df) >= 13:
-        year_ago = df.iloc[-13]
-        sections.append(f"ULTIMO MES vs MESMO MES ANO PASSADO ({last_month} vs {year_ago_month}):")
-        for col in key_cols:
-            lv, yv = last[col], year_ago[col]
-            if yv != 0:
-                pct = (lv - yv) / abs(yv) * 100
-                intensity = "forte alta" if pct > 20 else ("alta" if pct > 0.5 else ("forte queda" if pct < -20 else ("queda" if pct < -0.5 else "estavel")))
-                sections.append(f"  {col}: {lv:.2f} vs {yv:.2f} ({pct:+.1f}%) {intensity}")
-        sections.append("")
-
-    if len(df) >= 6:
-        last6 = df.tail(6)
-        labels = dates.iloc[-6:].str[:7].tolist() if has_date else [str(i) for i in range(len(df) - 6, len(df))]
-        sections.append("TENDENCIA ULTIMOS 6 MESES:")
-        for col in key_cols[:4]:
-            vals = " -> ".join(f"{d}={last6.iloc[i][col]:.0f}" for i, d in enumerate(labels))
-            sections.append(f"  {col}: {vals}")
-        sections.append("")
-
-    text_cols = _available_columns(df, _TEXT_CONTEXT_COLUMNS)
-    if text_cols:
-        sections.append("CONTEXTO QUALITATIVO DO ULTIMO MES:")
-        for col in text_cols:
-            value = _text_value(last, col)
-            if value:
-                sections.append(f"  {col}: {value}")
-        sections.append("")
-
-        sections.append("CONTEXTO QUALITATIVO ULTIMOS 4 MESES:")
-        for _, row in df.tail(4).iterrows():
-            label = _format_period(row["date"]) if has_date else "periodo"
-            pieces = []
-            for col in text_cols:
-                value = _text_value(row, col)
-                if value:
-                    pieces.append(f"{col}={value}")
-            if pieces:
-                sections.append(f"  {label}: " + " | ".join(pieces))
-        sections.append("")
-
-    drops = detect_drops(df, threshold=-8.0)
-    mrr_drops = drops.get("mrr", [])
-    if mrr_drops:
-        worst = max(mrr_drops, key=lambda x: abs(x["pct_change"]))
-        idx = worst["index"]
-        label = _format_period(df["date"].iloc[idx]) if has_date else f"periodo {idx}"
-        sections.append(f"PIOR QUEDA DE MRR: {label} ({worst['pct_change']:.1f}%)")
-
-    outliers = detect_outliers(df)
-    key_outliers = {k: v for k, v in outliers.items() if k in key_cols}
-    for col, vals in list(key_outliers.items())[:2]:
-        sections.append(f"OUTLIER em {col}: {[round(v, 2) for v in vals[:3]]}")
-
-    if mrr_drops or key_outliers:
-        sections.append("")
-
-    stats = compute_basic_stats(df)
-    sections.append("ESTATISTICAS HISTORICAS:")
-    for col in key_cols:
-        s = stats[col]
-        sections.append(f"  {col}: media={s['mean']:.2f}, min={s['min']:.2f}, max={s['max']:.2f}")
     sections.append("")
 
-    table_cols = _available_columns(df, _TABLE_CONTEXT_COLUMNS)
-    if table_cols:
-        sections.append("TABELA RESUMIDA ULTIMOS 12 MESES:")
-        sections.append(df[table_cols].tail(12).to_string(index=False))
-    else:
-        sections.append("TABELA RESUMIDA ULTIMOS 12 MESES:")
-        sections.append(df.tail(12).to_string(index=False))
+    story = _workbook_story(workbook)
+    if story:
+        sections.append(f"LEITURA EXECUTIVA: {story}")
+        sections.append("")
 
-    return "\n".join(sections)
+    sections.append("LEITURA HUMANA DO ARQUIVO:")
+    for sheet in _ordered_sheets(workbook)[:8]:
+        sections.append(f"- {sheet['name']}: {_sheet_role(sheet)}")
+    relationship_hints = _relationship_hints(workbook)
+    if relationship_hints:
+        for hint in relationship_hints[:4]:
+            sections.append(f"- Relacao sugerida: {hint}")
+    sections.append("")
+
+    for sheet in _ordered_sheets(workbook):
+        summary = sheet["column_summary"]
+        sections.append(f"ABA: {sheet['name']}")
+        sections.append(f"- leitura provavel: {_sheet_role(sheet)}")
+        sections.append(
+            f"- shape: {sheet['shape'][0]} linhas x {sheet['shape'][1]} colunas "
+            f"(removidas {sheet['empty_rows_removed']} linhas totalmente vazias)"
+        )
+        sections.append(f"- colunas principais: {', '.join(summary['usable_columns'][:10])}")
+        sections.append(
+            f"- tipos: {len(summary['numeric_columns'])} numericas, "
+            f"{len(summary['date_columns'])} datas, {len(summary['text_columns'])} textuais"
+        )
+        if summary["likely_id_columns"]:
+            sections.append(f"- possiveis IDs: {', '.join(summary['likely_id_columns'])}")
+        if summary["formula_columns"]:
+            sections.append(f"- colunas calculadas por formula: {', '.join(summary['formula_columns'][:6])}")
+        if summary["formula_only_columns"]:
+            sections.append(f"- colunas sem valor cacheado, mas com formula: {', '.join(summary['formula_only_columns'][:6])}")
+        if summary["empty_columns"]:
+            sections.append(f"- colunas realmente vazias: {', '.join(summary['empty_columns'][:6])}")
+        if summary["mostly_empty_columns"]:
+            sections.append(f"- colunas quase vazias: {', '.join(summary['mostly_empty_columns'][:6])}")
+
+        stats_lines = _numeric_stats_lines(sheet["dataframe"], summary["numeric_columns"])
+        if stats_lines:
+            sections.append("- estatisticas numericas:")
+            sections.extend(stats_lines)
+
+        category_lines = _top_category_lines(sheet["dataframe"], summary["text_columns"])
+        if category_lines:
+            sections.append("- categorias e padroes textuais:")
+            sections.extend(category_lines)
+
+        if sheet["formula_examples"]:
+            sections.append("- exemplos de formulas:")
+            functions = _formula_function_names(sheet["formula_examples"])
+            if functions:
+                sections.append(f"  funcoes usadas: {', '.join(functions[:6])}")
+            for item in sheet["formula_examples"][:3]:
+                sections.append(f"  {item['cell']}: {item['formula'][:220]}")
+
+        preview_lines = _preview_lines(sheet["preview"])
+        if preview_lines:
+            sections.append("- amostra de linhas:")
+            sections.extend(preview_lines[:1])
+
+        sections.append("")
+
+    return "\n".join(sections).strip()
+
+
+def _pick_primary_sheets(workbook: dict, limit: int = 3) -> list[dict]:
+    """Sort sheets by volume and return the most relevant ones."""
+    sheets = list(workbook["sheets"])
+    sheets.sort(
+        key=lambda sheet: (
+            sheet["shape"][0],
+            len(sheet["column_summary"]["usable_columns"]),
+            sheet["formula_count"],
+        ),
+        reverse=True,
+    )
+    return sheets[:limit]
+
+
+def _ordered_sheets(workbook: dict) -> list[dict]:
+    """Order sheets by semantic importance first, then by size."""
+    sheets = list(workbook["sheets"])
+    sheets.sort(
+        key=lambda sheet: (
+            _sheet_priority(sheet),
+            -sheet["shape"][0],
+            -sheet["formula_count"],
+        )
+    )
+    return sheets
+
+
+def _sheet_with_most_empty_columns(workbook: dict) -> dict | None:
+    """Return the sheet with the highest number of empty columns."""
+    sheets = workbook["sheets"]
+    if not sheets:
+        return None
+    return max(sheets, key=lambda sheet: len(sheet["column_summary"]["empty_columns"]))
+
+
+def _numeric_stats_lines(dataframe: pd.DataFrame, numeric_columns: list[str]) -> list[str]:
+    """Build a few summary lines for numeric columns."""
+    lines = []
+    for column in numeric_columns[:4]:
+        series = dataframe[column].dropna()
+        if series.empty:
+            continue
+        lines.append(
+            f"  {column}: min={series.min():.2f}, max={series.max():.2f}, "
+            f"mean={series.mean():.2f}"
+        )
+    return lines
+
+
+def _preview_lines(preview: list[dict]) -> list[str]:
+    """Render preview rows as compact key=value lines."""
+    lines = []
+    for row in preview[:2]:
+        parts = [f"{key}={value}" for key, value in row.items() if str(value) != ""]
+        if parts:
+            lines.append("  " + " | ".join(parts))
+    return lines
+
+
+def _sheet_note(sheet: dict) -> str:
+    """Return a compact note for the overview table."""
+    summary = sheet["column_summary"]
+    notes = []
+    if summary["likely_id_columns"]:
+        notes.append(f"id: {summary['likely_id_columns'][0]}")
+    if summary["date_columns"]:
+        notes.append(f"datas: {summary['date_columns'][0]}")
+    if summary["formula_columns"]:
+        notes.append(f"formulas: {summary['formula_columns'][0]}")
+    if not notes:
+        notes.append(f"{len(summary['text_columns'])} colunas textuais")
+    return " | ".join(notes)
+
+
+def _sheet_role(sheet: dict) -> str:
+    """Infer a likely business role for the sheet."""
+    normalized_name = _normalize_text(sheet["name"])
+    summary = sheet["column_summary"]
+    rows, columns = sheet["shape"]
+
+    if "readme" in normalized_name or "glossario" in normalized_name:
+        return "explica o contexto do arquivo e serve como guia de leitura"
+    if "resumo" in normalized_name or "executivo" in normalized_name or "overview" in normalized_name:
+        return "consolida os principais indicadores do negocio em formato executivo"
+    if "financeiro" in normalized_name or "dre" in normalized_name:
+        return "resume a performance financeira mensal e a estrutura de custos"
+    if "forecast" in normalized_name or "meta" in normalized_name:
+        return "compara metas, forecast e realizado"
+    if "cliente" in normalized_name:
+        return "cadastro mestre da carteira de clientes"
+    if "contrato" in normalized_name or "assinatura" in normalized_name:
+        return "mostra a carteira contratual, MRR e configuracao comercial"
+    if "fatura" in normalized_name or "pagamento" in normalized_name:
+        return "mostra faturamento, cobranca e recebimento"
+    if "pipeline" in normalized_name or "venda" in normalized_name:
+        return "mostra o funil comercial e as oportunidades abertas ou ganhas"
+    if "uso" in normalized_name or "produto" in normalized_name:
+        return "mostra adocao e intensidade de uso do produto"
+    if "plano" in normalized_name:
+        return "catalogo de planos, modulos e regras comerciais"
+    if "suporte" in normalized_name or "ticket" in normalized_name:
+        return "mostra a operacao de suporte e qualidade de atendimento"
+    if "health" in normalized_name or "cs" in normalized_name:
+        return "mostra saude da base, risco de churn e renovacao"
+
+    if rows <= 12 and sheet["formula_count"] > 0 and len(summary["numeric_columns"]) >= 2:
+        return "parece uma aba de resumo ou consolidacao com calculos"
+    if summary["likely_id_columns"] and len(summary["text_columns"]) >= 2 and len(summary["numeric_columns"]) <= 2:
+        return "parece uma base cadastral ou dimensao de entidades"
+    if summary["date_columns"] and len(summary["numeric_columns"]) >= 2 and rows >= 12:
+        return "parece uma base historica ou transacional com recorte temporal"
+    if sheet["formula_count"] > 0 and rows >= 20:
+        return "parece uma aba operacional com colunas calculadas"
+    if rows <= 20 and columns <= 6:
+        return "parece uma aba curta de apoio, parametros ou lookup"
+    return "parece uma aba operacional com dados brutos"
+
+
+def _sheet_priority(sheet: dict) -> int:
+    """Return a stable semantic priority for context ordering."""
+    normalized_name = _normalize_text(sheet["name"])
+    if "resumo" in normalized_name or "executivo" in normalized_name:
+        return 0
+    if "readme" in normalized_name:
+        return 1
+    if "financeiro" in normalized_name or "dre" in normalized_name:
+        return 2
+    if "forecast" in normalized_name or "meta" in normalized_name:
+        return 3
+    if "contrato" in normalized_name or "assinatura" in normalized_name:
+        return 4
+    if "fatura" in normalized_name or "pagamento" in normalized_name:
+        return 5
+    if "cliente" in normalized_name:
+        return 6
+    if "pipeline" in normalized_name or "venda" in normalized_name:
+        return 7
+    if "uso" in normalized_name:
+        return 8
+    if "suporte" in normalized_name or "ticket" in normalized_name:
+        return 9
+    if "health" in normalized_name or normalized_name == "cs_health":
+        return 10
+    if "plano" in normalized_name or "produto" in normalized_name:
+        return 11
+    return 20
+
+
+def _top_category_lines(dataframe: pd.DataFrame, text_columns: list[str]) -> list[str]:
+    """Return top category hints for low-cardinality text columns."""
+    lines = []
+    for column in text_columns[:4]:
+        series = dataframe[column].dropna().astype(str).str.strip()
+        if series.empty:
+            continue
+        unique_count = series.nunique()
+        if unique_count > 10:
+            continue
+        top_values = series.value_counts().head(3)
+        formatted = ", ".join(f"{value} ({count})" for value, count in top_values.items())
+        lines.append(f"  {column}: {formatted}")
+    return lines
+
+
+def _relationship_hints(workbook: dict) -> list[str]:
+    """Infer simple relationships from shared column names across sheets."""
+    hints = []
+    sheets = workbook["sheets"]
+    for index, left in enumerate(sheets):
+        left_columns = set(left["column_summary"]["usable_columns"])
+        for right in sheets[index + 1:]:
+            shared = left_columns & set(right["column_summary"]["usable_columns"])
+            join_keys = [column for column in shared if column.lower().endswith("_id") or column.lower() in {"id", "date", "month"}]
+            if join_keys:
+                hints.append(f"{left['name']} e {right['name']} podem se conectar por {', '.join(sorted(join_keys)[:3])}")
+            elif len(shared) >= 3:
+                hints.append(f"{left['name']} e {right['name']} compartilham colunas como {', '.join(sorted(shared)[:3])}")
+    return hints
+
+
+def _formula_function_names(formula_examples: list[dict]) -> list[str]:
+    """Extract the main spreadsheet functions used in formula examples."""
+    names = []
+    for item in formula_examples:
+        formula = item.get("formula", "")
+        matches = re.findall(r"([A-Z][A-Z0-9\.]+)\(", formula)
+        names.extend(matches)
+    return list(dict.fromkeys(names))
+
+
+def _workbook_story(workbook: dict) -> str | None:
+    """Infer a human-friendly reading of the workbook theme."""
+    sheet_names = {_normalize_text(sheet["name"]) for sheet in workbook["sheets"]}
+    if {"clientes", "contratos_assinaturas", "faturas_pagamentos", "uso_produto", "cs_health"} <= sheet_names:
+        return "o arquivo parece representar a operacao completa de uma empresa SaaS B2B, cobrindo vendas, contratos, faturamento, uso, suporte e saude da base"
+
+    readme_sheet = next((sheet for sheet in workbook["sheets"] if "readme" in _normalize_text(sheet["name"])), None)
+    if readme_sheet and readme_sheet["preview"]:
+        description = readme_sheet["preview"][0].get("descricao")
+        if description:
+            return str(description)
+    return None
+
+
+def _normalize_text(value: str) -> str:
+    """Normalize sheet names for semantic matching."""
+    return (
+        str(value)
+        .strip()
+        .lower()
+        .replace(" ", "_")
+        .replace("-", "_")
+    )

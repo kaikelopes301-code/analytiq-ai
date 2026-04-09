@@ -47,7 +47,7 @@ def _get_client():
     """Initialize and return the Gemini client."""
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
-        raise EnvironmentError("GEMINI_API_KEY não encontrada no .env")
+        raise EnvironmentError("GEMINI_API_KEY nao encontrada no .env")
     return genai.Client(api_key=api_key)
 
 
@@ -93,25 +93,30 @@ def resolve_model_name(requested_model: str | None, available_models: list[str] 
 
 
 def build_prompt(context: str, insights: str, question: str) -> str:
-    """Assemble the full prompt sent to Gemini."""
-    return f"""Você é um analista de dados sênior especializado em métricas SaaS.
+    """Assemble the runtime prompt for spreadsheet QA."""
+    return f"""Voce e um analista senior de dados que conversa com naturalidade sobre planilhas.
 
 REGRAS:
-- Responda SOMENTE com base nos dados abaixo. Nunca invente ou estime números.
-- "Último mês", "mês passado" ou "mais recente" = o mês indicado em ÚLTIMO MÊS NOS DADOS.
-- Cite sempre valores exatos e variações percentuais dos dados.
-- Quando a pergunta envolver clientes, canais, segmentos ou risco, use também o contexto qualitativo e os nomes de contas presentes na base.
-- Se identificar padrões relevantes além da pergunta, mencione em 1 linha.
-- Se os dados não tiverem a informação solicitada, diga claramente.
+- Responda SOMENTE com base no contexto extraido do arquivo em runtime.
+- O arquivo pode ter multiplas abas, formulas, colunas vazias e tabelas com estruturas diferentes.
+- Quando citar dados, mencione a aba e as colunas sempre que isso ajudar.
+- Se o contexto mostrar formulas, voce pode explicar a logica delas, mas nao invente valores nao presentes.
+- Se uma resposta depender de calculo que nao apareceu no contexto, diga isso claramente.
+- Se houver pouca evidencia para uma conclusao, seja explicito.
+- Escreva como um analista humano explicando para outra pessoa, e nao como um dump tecnico de metadados.
+- Se a pergunta for aberta, comece com a resposta principal em 1 ou 2 frases e depois explique o por que.
+- Se a pergunta pedir interpretacao, conecte estrutura, dados e formulas em linguagem natural.
+- Evite listar tudo da planilha sem necessidade. Selecione apenas o que ajuda a responder.
 
-{truncate_text(context, max_chars=7000)}
+CONTEXTO DO ARQUIVO:
+{truncate_text(context, max_chars=9000)}
 
-ALERTAS PRÉ-CALCULADOS:
-{truncate_text(insights, max_chars=700)}
+INSIGHTS PRE-CALCULADOS:
+{truncate_text(insights, max_chars=1200)}
 
 PERGUNTA: {question}
 
-Responda em português, de forma direta. Vá ao ponto, cite os números."""
+Responda em portugues, de forma natural, clara e pragmatica."""
 
 
 def _stream_content(client, model_name: str, prompt: str) -> Generator[str, None, None]:
@@ -134,15 +139,26 @@ def ask(
     client = _get_client()
     prompt = build_prompt(context, insights, question)
     selected_model = _normalize_model_name(model_name) or MODEL_NAME
+    emitted_any_chunk = False
     try:
-        yield from _stream_content(client, selected_model, prompt)
+        for chunk in _stream_content(client, selected_model, prompt):
+            emitted_any_chunk = True
+            yield chunk
     except Exception as exc:
         if selected_model != MODEL_NAME:
-            yield f"_Aviso: `{selected_model}` não respondeu nesta conta. Usando `{MODEL_NAME}`._\n\n"
+            yield f"_Aviso: `{selected_model}` nao respondeu nesta conta. Usando `{MODEL_NAME}`._\n\n"
             try:
-                yield from _stream_content(client, MODEL_NAME, prompt)
+                for chunk in _stream_content(client, MODEL_NAME, prompt):
+                    emitted_any_chunk = True
+                    yield chunk
                 return
             except Exception as fallback_exc:
+                if emitted_any_chunk:
+                    yield "\n\n_(A resposta foi interrompida pela API. Tente novamente para aprofundar.)_"
+                    return
                 yield f"Erro ao consultar a IA: {fallback_exc}"
                 return
+        if emitted_any_chunk:
+            yield "\n\n_(A resposta foi interrompida pela API. Tente novamente para aprofundar.)_"
+            return
         yield f"Erro ao consultar a IA: {exc}"

@@ -5,7 +5,7 @@ from rich.live import Live
 
 from ai_agent import ask, choose_default_model, list_available_models, resolve_model_name
 from analyzer import build_ai_context, build_visual_snapshot, generate_insights, get_snapshot
-from data_loader import get_column_summary, load_csv
+from data_loader import load_workbook
 from utils import (
     console,
     print_help,
@@ -35,7 +35,7 @@ def _refresh_models() -> list[str]:
             lambda: list_available_models(refresh=True),
         )
     except Exception as exc:
-        console.print(f"  [yellow]Não consegui listar os modelos agora: {exc}[/yellow]")
+        console.print(f"  [yellow]Nao consegui listar os modelos agora: {exc}[/yellow]")
         console.print()
         return []
 
@@ -54,7 +54,7 @@ def _handle_command(
     arg = _normalize_model_name(arg)
 
     if command in {"/sair", "/exit", "/quit"}:
-        console.print("  [dim]até mais[/dim]")
+        console.print("  [dim]ate mais[/dim]")
         return True, True, current_model, available_models
 
     if command == "/ajuda":
@@ -91,7 +91,7 @@ def _handle_command(
 
         if available_models and arg not in available_models:
             console.print(
-                f"  [yellow]modelo `{arg}` não está disponível nesta chave. Use `/modelos` para ver a lista real.[/yellow]"
+                f"  [yellow]modelo `{arg}` nao esta disponivel nesta chave. Use `/modelos` para ver a lista real.[/yellow]"
             )
             console.print()
             return True, False, current_model, available_models
@@ -105,24 +105,20 @@ def _handle_command(
 
 
 def run(filepath: str, requested_model: str | None = None) -> None:
-    """Load the dataset and run the terminal chat interface."""
+    """Load the workbook and run the terminal chat interface."""
 
     def load():
-        df = load_csv(filepath)
-        get_column_summary(df)
-        insights = generate_insights(df)
-        context = build_ai_context(df)
-        snapshot = get_snapshot(df)
-        visual_snapshot = build_visual_snapshot(df)
-        try:
-            available_models = list_available_models()
-        except Exception:
-            available_models = []
-        return df, insights, context, snapshot, visual_snapshot, available_models
+        workbook = load_workbook(filepath)
+        insights = generate_insights(workbook)
+        context = build_ai_context(workbook)
+        snapshot = get_snapshot(workbook)
+        visual_snapshot = build_visual_snapshot(workbook)
+        available_models = []
+        return workbook, insights, context, snapshot, visual_snapshot, available_models
 
     _, insights, context, snapshot, visual_snapshot, available_models = run_with_spinner(
         console,
-        "Carregando dados...",
+        "Carregando planilha...",
         load,
     )
 
@@ -133,19 +129,19 @@ def run(filepath: str, requested_model: str | None = None) -> None:
     print_welcome(console, filepath, current_model, snapshot)
     if requested_model and requested_model != current_model:
         console.print(
-            f"  [yellow]modelo `{requested_model}` indisponível nesta chave; usando `{current_model}`.[/yellow]"
+            f"  [yellow]modelo `{requested_model}` indisponivel nesta chave; usando `{current_model}`.[/yellow]"
         )
         console.print()
 
     while True:
         try:
-            question = console.input("  [bold]você ›[/bold] ").strip()
+            question = console.input("  [bold]voce >[/bold] ").strip()
         except (EOFError, KeyboardInterrupt):
-            console.print("\n  [dim]até mais[/dim]")
+            console.print("\n  [dim]ate mais[/dim]")
             break
 
         if question.lower() in ("sair", "exit", "quit"):
-            console.print("  [dim]até mais[/dim]")
+            console.print("  [dim]ate mais[/dim]")
             break
 
         if not question:
@@ -190,9 +186,9 @@ def run(filepath: str, requested_model: str | None = None) -> None:
 
 def parse_args(argv: list[str]):
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Análise de CSV com chat Gemini no terminal.")
-    parser.add_argument("filepath", help="Caminho para o CSV")
-    parser.add_argument("--model", help="Modelo Gemini a usar na sessão")
+    parser = argparse.ArgumentParser(description="Analise de CSV/XLSX com chat Gemini no terminal.")
+    parser.add_argument("filepath", help="Caminho para o CSV ou XLSX")
+    parser.add_argument("--model", help="Modelo Gemini a usar na sessao")
     return parser.parse_args(argv)
 
 

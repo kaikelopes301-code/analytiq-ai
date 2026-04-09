@@ -6,18 +6,19 @@ from ai_agent import ask, build_prompt, choose_default_model, list_available_mod
 
 
 def test_build_prompt_includes_context():
-    context = "revenue mean=15000"
-    insights = "- QUEDA em 'revenue' em 2024-04: -50.0%"
-    question = "Teve queda?"
+    context = "ABA: Revenue\n- colunas: month, revenue"
+    insights = "- Arquivo xlsx com 2 abas"
+    question = "Qual aba tem mais linhas?"
     prompt = build_prompt(context, insights, question)
-    assert "revenue" in prompt
-    assert "Teve queda?" in prompt
-    assert "QUEDA" in prompt
+    assert "Revenue" in prompt
+    assert "Qual aba tem mais linhas?" in prompt
+    assert "Arquivo xlsx" in prompt
+    assert "analista humano" in prompt
 
 
 def test_build_prompt_includes_no_hallucination_instruction():
     prompt = build_prompt("ctx", "insights", "q?")
-    assert "nunca invente" in prompt.lower() or "somente" in prompt.lower()
+    assert "somente" in prompt.lower() or "nao invente" in prompt.lower()
 
 
 def test_ask_is_a_generator():
@@ -30,6 +31,22 @@ def test_ask_is_a_generator():
         chunks = list(ask("ctx", "insights", "pergunta?", model_name="gemini-2.5-flash"))
 
     assert chunks == ["resposta"]
+
+
+def test_ask_returns_soft_notice_when_stream_breaks_after_partial_output():
+    mock_client = MagicMock()
+
+    def broken_stream(**kwargs):
+        yield SimpleNamespace(text="primeira parte")
+        raise RuntimeError("provider failure")
+
+    mock_client.models.generate_content_stream.side_effect = broken_stream
+
+    with patch("ai_agent._get_client", return_value=mock_client):
+        chunks = list(ask("ctx", "insights", "pergunta?", model_name="gemini-2.5-flash"))
+
+    assert chunks[0] == "primeira parte"
+    assert "interrompida pela API" in chunks[-1]
 
 
 def test_list_available_models_filters_and_sorts():

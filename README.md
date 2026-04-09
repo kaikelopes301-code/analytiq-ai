@@ -1,6 +1,6 @@
-# AI Data Analysis Agent
+# AI Spreadsheet Chat
 
-Agente de análise de dados em terminal com interface de chat, painel visual sob demanda e seleção dinâmica de modelos Gemini.
+MVP de terminal que le um `csv` ou `xlsx`, identifica abas, colunas, formulas e estrutura basica em runtime, e responde perguntas sobre o arquivo com Gemini.
 
 ## Setup
 
@@ -14,49 +14,43 @@ Crie um `.env` com a sua chave:
 GEMINI_API_KEY=sua_chave_aqui
 ```
 
-Obtenha sua chave em [Google AI Studio](https://aistudio.google.com/app/apikey).
-
 ## Uso
 
 ```bash
-python main.py data/sample.csv
-python main.py data/sample.csv --model gemini-2.5-flash
+python main.py data/saas_b2b_brasil_
+python main.py caminho/para/arquivo.xlsx
+python main.py caminho/para/arquivo.xlsx --model gemini-2.5-flash
 ```
 
-Ao iniciar, o app abre em uma tela clean e centralizada. O painel visual só aparece quando você pede por insights ou faz perguntas ligadas a métricas.
+## O que este MVP faz
 
-## Comandos no chat
+- le `csv` e `xlsx`
+- lista abas em arquivos Excel
+- detecta formulas em `xlsx`
+- encontra colunas numericas, textuais, datas e colunas vazias
+- monta um contexto automatico por aba
+- responde perguntas sem schema hardcoded
 
-- `/insights`: abre o painel visual com cards, tendências e highlights.
-- `/modelos`: lista os modelos Gemini disponíveis para a sua chave.
-- `/modelo <id>`: troca o modelo atual sem reiniciar.
-- `/modelo auto`: escolhe o melhor fallback disponível.
-- `/limpar`: limpa a tela e volta para a tela inicial.
-- `/sair`: encerra a sessão.
+## Comandos
+
+- `/insights`: mostra o overview estrutural da planilha
+- `/modelos`: lista os modelos Gemini disponiveis
+- `/modelo <id>`: troca o modelo atual
+- `/modelo auto`: escolhe o melhor fallback
+- `/limpar`: limpa a tela
+- `/sair`: encerra a sessao
 
 ## Perguntas de exemplo
 
-- "Me dá um insight visual do negócio"
-- "Como estão churn, MRR e clientes?"
-- "Quais clientes puxaram o crescimento em 2024-12?"
-- "O crescimento veio mais de expansão ou de novos logos?"
-- "Que sinais de risco aparecem antes das quedas de MRR?"
-- "Qual segmento e canal mais ajudaram nos melhores meses?"
+- "Quais abas existem neste arquivo?"
+- "Ha formulas? Em quais abas?"
+- "Qual parece ser a aba principal?"
+- "Quais colunas estao quase vazias?"
+- "Quais IDs e colunas de data voce detectou?"
+- "Resuma a estrutura da planilha"
 
-## Base de exemplo
-
-O arquivo [data/sample.csv](C:/analytiq-ai/data/sample.csv) agora vem mais estruturado, com:
-
-- métricas SaaS mensais
-- drivers de retenção e expansão
-- mix de enterprise, mid-market e SMB
-- nomes de clientes legíveis
-- contexto qualitativo por mês para o agente interpretar melhor
-
-Veja também [data/README.md](C:/analytiq-ai/data/README.md).
-
-## Rodar os testes
+## Testes
 
 ```bash
-pytest tests/ -v
+python -m pytest tests -q
 ```
